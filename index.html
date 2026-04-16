@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sky Sprint (Flappy Runner)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(180deg, #80d3ff 0%, #def4ff 100%);
+      color: #0e2d42;
+      padding: 18px;
+    }
+    .wrap {
+      width: min(94vw, 460px);
+      display: grid;
+      gap: 10px;
+    }
+    h1 {
+      margin: 0;
+      text-align: center;
+      font-size: 1.25rem;
+      color: #0e2d42;
+    }
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.78);
+      border: 2px solid rgba(14, 45, 66, 0.15);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-weight: 700;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 16px;
+      font-weight: 700;
+      cursor: pointer;
+      background: #0f6ea8;
+      color: white;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      max-height: 78vh;
+      aspect-ratio: 9 / 16;
+      border-radius: 14px;
+      border: 3px solid rgba(255, 255, 255, 0.9);
+      box-shadow: 0 18px 40px rgba(0,0,0,.2);
+      background: linear-gradient(180deg, #6cc8ff 0%, #b6ecff 65%, #71c558 65%, #71c558 100%);
+      display: block;
+      touch-action: manipulation;
+    }
+    .hint {
+      margin: 0;
+      text-align: center;
+      font-size: .95rem;
+      font-weight: 600;
+    }
+    .hint.small {
+      font-size: .83rem;
+      font-weight: 500;
+      opacity: .85;
+    }
+    .error {
+      color: #7c0015;
+      background: #ffd9df;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Sky Sprint</h1>
+    <div class="hud">
+      <span id="score">Score: 0</span>
+      <span id="best">Best: 0</span>
+    </div>
+    <canvas id="game" width="360" height="640" aria-label="Flappy infinite runner game"></canvas>
+    <p id="error" class="error"></p>
+    <div class="controls">
+      <button id="startBtn" type="button">Start / Flap</button>
+      <button id="restartBtn" type="button">Restart</button>
+    </div>
+    <p class="hint">Tap the canvas or press <b>Space</b>/<b>↑</b> to flap and survive as long as possible.</p>
+    <p class="hint small">Note: PR/Diff viewers show source code only; open this file in a browser to play.</p>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const scoreEl = document.getElementById('score');
+    const bestEl = document.getElementById('best');
+    const errorEl = document.getElementById('error');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      errorEl.style.display = 'block';
+      errorEl.textContent = 'Unable to start: your browser does not support canvas 2D rendering.';
+      startBtn.disabled = true;
+      restartBtn.disabled = true;
+    }
+
+    const GROUND = 95;
+    const PIPE_W = 66;
+    const GAP = 172;
+    const PIPE_RATE_MS = 1350;
+    const SPEED = 215;
+    const GRAVITY = 1450;
+    const FLAP_FORCE = -430;
+
+    const game = {
+      bird: { x: 90, y: 250, r: 16, vy: 0 },
+      pipes: [],
+      started: true,
+      over: false,
+      score: 0,
+      best: Number(localStorage.getItem('skySprintBest') || 0),
+      lastPipeAt: 0,
+      lastTime: 0
+    };
+
+    function syncHud() {
+      scoreEl.textContent = `Score: ${game.score}`;
+      bestEl.textContent = `Best: ${game.best}`;
+    }
+
+    function reset(full = false) {
+      game.bird.y = 250;
+      game.bird.vy = 0;
+      game.pipes = [];
+      game.score = 0;
+      game.over = false;
+      game.lastPipeAt = 0;
+      if (full) game.started = false;
+      syncHud();
+    }
+
+    function spawnPipe() {
+      const minTop = 70;
+      const maxTop = canvas.height - GROUND - GAP - 70;
+      const topH = Math.random() * (maxTop - minTop) + minTop;
+      game.pipes.push({ x: canvas.width + 20, topH, passed: false });
+    }
+
+    function circleHitsRect(cx, cy, r, rx, ry, rw, rh) {
+      const nx = Math.max(rx, Math.min(cx, rx + rw));
+      const ny = Math.max(ry, Math.min(cy, ry + rh));
+      const dx = cx - nx;
+      const dy = cy - ny;
+      return dx * dx + dy * dy <= r * r;
+    }
+
+    function flap() {
+      if (!ctx) return;
+      if (game.over) reset();
+      game.started = true;
+      game.bird.vy = FLAP_FORCE;
+    }
+
+    function update(dt, now) {
+      if (!ctx) return;
+      if (!game.started || game.over) return;
+
+      game.bird.vy += GRAVITY * dt;
+      game.bird.y += game.bird.vy * dt;
+
+      if (now - game.lastPipeAt >= PIPE_RATE_MS) {
+        spawnPipe();
+        game.lastPipeAt = now;
+      }
+
+      for (const p of game.pipes) {
+        p.x -= SPEED * dt;
+
+        if (!p.passed && p.x + PIPE_W < game.bird.x) {
+          p.passed = true;
+          game.score += 1;
+          if (game.score > game.best) {
+            game.best = game.score;
+            localStorage.setItem('skySprintBest', String(game.best));
+          }
+          syncHud();
+        }
+
+        const topHit = circleHitsRect(game.bird.x, game.bird.y, game.bird.r, p.x, 0, PIPE_W, p.topH);
+        const bottomY = p.topH + GAP;
+        const bottomH = canvas.height - GROUND - bottomY;
+        const bottomHit = circleHitsRect(game.bird.x, game.bird.y, game.bird.r, p.x, bottomY, PIPE_W, bottomH);
+
+        if (topHit || bottomHit) game.over = true;
+      }
+
+      game.pipes = game.pipes.filter((p) => p.x + PIPE_W > -20);
+
+      if (game.bird.y - game.bird.r < 0) {
+        game.bird.y = game.bird.r;
+        game.bird.vy = 0;
+      }
+
+      const floor = canvas.height - GROUND - game.bird.r;
+      if (game.bird.y > floor) {
+        game.bird.y = floor;
+        game.over = true;
+      }
+    }
+
+    function drawBackground() {
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#6dc9ff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height - GROUND);
+
+      ctx.fillStyle = '#71c558';
+      ctx.fillRect(0, canvas.height - GROUND, canvas.width, GROUND);
+    }
+
+    function drawPipes() {
+      if (!ctx) return;
+      for (const p of game.pipes) {
+        ctx.fillStyle = '#27a844';
+        ctx.fillRect(p.x, 0, PIPE_W, p.topH);
+        ctx.fillRect(p.x, p.topH + GAP, PIPE_W, canvas.height - GROUND - (p.topH + GAP));
+
+        ctx.fillStyle = '#35bf56';
+        ctx.fillRect(p.x - 4, p.topH - 14, PIPE_W + 8, 14);
+        ctx.fillRect(p.x - 4, p.topH + GAP, PIPE_W + 8, 14);
+      }
+    }
+
+    function drawBird() {
+      if (!ctx) return;
+      const tilt = Math.max(-0.4, Math.min(0.8, game.bird.vy / 500));
+      ctx.save();
+      ctx.translate(game.bird.x, game.bird.y);
+      ctx.rotate(tilt);
+
+      ctx.fillStyle = '#ffd84e';
+      ctx.beginPath();
+      ctx.arc(0, 0, game.bird.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ff9f1d';
+      ctx.beginPath();
+      ctx.moveTo(game.bird.r - 3, -4);
+      ctx.lineTo(game.bird.r + 12, 0);
+      ctx.lineTo(game.bird.r - 3, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(-4, -6, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.beginPath();
+      ctx.arc(-3, -6, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawOverlay() {
+      if (!ctx) return;
+      const msg = !game.started
+        ? 'Press Start or tap canvas'
+        : (game.over ? 'Game Over! Flap to retry' : '');
+      if (!msg) return;
+
+      ctx.fillStyle = 'rgba(0,0,0,.45)';
+      ctx.fillRect(24, canvas.height / 2 - 34, canvas.width - 48, 68);
+      ctx.fillStyle = 'white';
+      ctx.textAlign = 'center';
+      ctx.font = '700 22px Arial';
+      ctx.fillText(msg, canvas.width / 2, canvas.height / 2 + 8);
+      ctx.textAlign = 'left';
+    }
+
+    function render() {
+      if (!ctx) return;
+      drawBackground();
+      drawPipes();
+      drawBird();
+      drawOverlay();
+    }
+
+    function loop(ts) {
+      if (!ctx) return;
+      if (!game.lastTime) game.lastTime = ts;
+      const dt = Math.min(0.033, (ts - game.lastTime) / 1000);
+      game.lastTime = ts;
+
+      update(dt, ts);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' || e.code === 'ArrowUp') {
+        e.preventDefault();
+        flap();
+      }
+    });
+    canvas.addEventListener('pointerdown', flap);
+    startBtn.addEventListener('click', flap);
+    restartBtn.addEventListener('click', () => reset(true));
+
+    syncHud();
+    render();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
